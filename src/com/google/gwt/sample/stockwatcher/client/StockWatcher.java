@@ -2,6 +2,8 @@ package com.google.gwt.sample.stockwatcher.client;
 
 import com.google.gwt.core.client.EntryPoint;
 import com.google.gwt.core.client.GWT;
+import com.google.gwt.core.client.JsArray;
+import com.google.gwt.core.client.JsonUtils;
 import com.google.gwt.event.dom.client.ClickEvent;
 import com.google.gwt.event.dom.client.ClickHandler;
 import com.google.gwt.event.dom.client.KeyCodes;
@@ -19,11 +21,19 @@ import com.google.gwt.user.client.ui.RootPanel;
 import com.google.gwt.user.client.ui.TextBox;
 import com.google.gwt.user.client.ui.VerticalPanel;
 import com.google.gwt.user.client.Window;
+import com.google.gwt.http.client.URL;
+import com.google.gwt.http.client.Request;
+import com.google.gwt.http.client.RequestBuilder;
+import com.google.gwt.http.client.RequestCallback;
+import com.google.gwt.http.client.RequestException;
+import com.google.gwt.http.client.Response;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Iterator;
 
 public class StockWatcher implements EntryPoint {
 
+  private static final String JSON_URL = GWT.getModuleBaseURL() + "stockPrices?q=";
   private static final int REFRESH_INTERVAL = 5000; // ms
   private VerticalPanel mainPanel = new VerticalPanel();
   private FlexTable stocksFlexTable = new FlexTable();
@@ -153,31 +163,53 @@ public class StockWatcher implements EntryPoint {
     * Generate random stock prices.
     */
   private void refreshWatchList() {
-    // Initialize the service proxy.
-    if (stockPriceSvc == null) {
-      stockPriceSvc = GWT.create(StockPriceService.class);
+    if (stocks.size() == 0) {
+      return;
     }
+  
+    String url = JSON_URL;
+  
+    // Append watch list stock symbols to query URL.
+    Iterator<String> iter = stocks.iterator();
+    while (iter.hasNext()) {
+      url += iter.next();
+      if (iter.hasNext()) {
+        url += "+";
+      }
+    }
+  
+    url = URL.encode(url);
+  
+    // Send request to server and catch any errors.
+    RequestBuilder builder = new RequestBuilder(RequestBuilder.GET, url);
 
-    // Set up the callback object.
-    AsyncCallback<StockPrice[]> callback = new AsyncCallback<StockPrice[]>() {
-      public void onFailure(Throwable caught) {
-        // If the stock code is in the list of delisted codes, display an error message.
-        String details = caught.getMessage();
-        if (caught instanceof DelistedException) {
-          details = "Company '" + ((DelistedException) caught).getSymbol() + "' was delisted";
+    try {
+      Request request = builder.sendRequest(null, new RequestCallback() {
+        public void onError(Request request, Throwable exception) {
+          displayError("Couldn’t retrieve JSON");
         }
+        
+        public void onResponseReceived(Request request, Response response) {
+          if (200 == response.getStatusCode()) {
+            updateTable(JsonUtils.<JsArray<StockData>>safeEval(response.getText()));
+          } else {
+            displayError("Couldn't retrieve JSON (" + response.getStatusText()
+                + ")");
+          }
+        }
+      });
+    } catch (RequestException e) {
+      displayError("Couldn’t retrieve JSON");
+    }
+  }
 
-        errorMsgLabel.setText("Error: " + details);
-        errorMsgLabel.setVisible(true);
-      }
-
-      public void onSuccess(StockPrice[] result) {
-        updateTable(result);
-      }
-    };
-
-    // Make the call to the stock price service.
-    stockPriceSvc.getPrices(stocks.toArray(new String[0]), callback);
+  /**
+   * If can't get JSON, display error message.
+   * @param error
+   */
+  private void displayError(String error) {
+    errorMsgLabel.setText("Error: " + error);
+    errorMsgLabel.setVisible(true);
   }
 
   /**
@@ -186,9 +218,9 @@ public class StockWatcher implements EntryPoint {
     * @param prices
     *          Stock data for all rows.
     */
-  private void updateTable(StockPrice[] prices) {
-    for (int i = 0; i < prices.length; i++) {
-      updateTable(prices[i]);
+  private void updateTable(JsArray<StockData> prices) {
+    for (int i = 0; i < prices.length(); i++) {
+      updateTable(prices.get(i));
     }
 
     // Display timestamp showing last refresh.
@@ -206,7 +238,7 @@ public class StockWatcher implements EntryPoint {
     *
     * @param price Stock data for a single row.
     */
-  private void updateTable(StockPrice price) {
+  private void updateTable(StockData price) {
     // Make sure the stock is still in the stock table.
     if (!stocks.contains(price.getSymbol())) {
       return;
